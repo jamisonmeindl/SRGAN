@@ -3,20 +3,36 @@ import torch
 from torch import nn
 
 
-class Generator(nn.Module):
+class Generator3D(nn.Module):
     def __init__(self, scale_factor):
+        super(Generator3D, self).__init__()
         upsample_block_num = int(math.log(scale_factor, 2))
-
-        super(Generator, self).__init__()
-        self.block1 = nn.Sequential(
+        
+        self.frame_conv1 = nn.Sequential(
             nn.Conv2d(3, 64, kernel_size=9, padding=4),
             nn.PReLU()
         )
+        self.frame_conv2 = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=9, padding=4),
+            nn.PReLU()
+        )
+        self.frame_conv3 = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=9, padding=4),
+            nn.PReLU()
+        )
+        
+        self.combine_conv = nn.Sequential(
+            nn.Conv2d(64 * 3, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU()
+        )
+        
         self.block2 = ResidualBlock(64)
         self.block3 = ResidualBlock(64)
         self.block4 = ResidualBlock(64)
         self.block5 = ResidualBlock(64)
         self.block6 = ResidualBlock(64)
+        
         self.block7 = nn.Sequential(
             nn.Conv2d(64, 64, kernel_size=3, padding=1),
             nn.BatchNorm2d(64)
@@ -26,24 +42,49 @@ class Generator(nn.Module):
         self.block8 = nn.Sequential(*block8)
 
     def forward(self, x):
-        block1 = self.block1(x)
-        block2 = self.block2(block1)
+        frame1_output = self.frame_conv1(x[:, 0, :, :, :])
+        frame2_output = self.frame_conv2(x[:, 1, :, :, :])
+        frame3_output = self.frame_conv3(x[:, 2, :, :, :])
+        
+        stacked_output = torch.cat((frame1_output, frame2_output, frame3_output), dim=1)
+        
+        combined_output = self.combine_conv(stacked_output)
+        
+        block2 = self.block2(combined_output)
         block3 = self.block3(block2)
         block4 = self.block4(block3)
         block5 = self.block5(block4)
         block6 = self.block6(block5)
         block7 = self.block7(block6)
-        block8 = self.block8(block1 + block7)
+        block8 = self.block8(block7 + combined_output)
 
         return (torch.tanh(block8) + 1) / 2
 
 
-class Discriminator(nn.Module):
+class Discriminator3D(nn.Module):
     def __init__(self):
-        super(Discriminator, self).__init__()
+        super(Discriminator3D, self).__init__()
+        self.frame_conv1 = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=9, padding=4),
+            nn.LeakyReLU(0.2)
+        )
+        self.frame_conv2 = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=9, padding=4),
+            nn.LeakyReLU(0.2)
+        )
+        self.frame_conv3 = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=9, padding=4),
+            nn.LeakyReLU(0.2)
+        )
+        
+        self.combine_conv = nn.Sequential(
+            nn.Conv2d(64 * 3, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.LeakyReLU(0.2)
+        )
         self.net = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=3, padding=1),
-            nn.LeakyReLU(0.2),
+            # nn.Conv2d(3, 64, kernel_size=3, padding=1),
+            # nn.LeakyReLU(0.2),
 
             nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(64),
@@ -86,7 +127,13 @@ class Discriminator(nn.Module):
 
     def forward(self, x):
         batch_size = x.size(0)
-        return torch.sigmoid(self.net(x).view(batch_size))
+        frame1_output = self.frame_conv1(x[:, 0, :, :, :])
+        frame2_output = self.frame_conv2(x[:, 1, :, :, :])
+        frame3_output = self.frame_conv3(x[:, 2, :, :, :])
+        stacked_output = torch.cat((frame1_output, frame2_output, frame3_output), dim=1)
+        
+        combined_output = self.combine_conv(stacked_output)
+        return torch.sigmoid(self.net(combined_output).view(batch_size))
 
 
 class ResidualBlock(nn.Module):
